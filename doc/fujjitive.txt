@@ -1,0 +1,117 @@
+*fujjitive.txt*   Fugitive-style jj change review for Neovim
+
+==============================================================================
+CONTENTS                                                  *fujjitive-contents*
+
+  1. Introduction ......... |fujjitive-introduction|
+  2. Commands ............. |fujjitive-commands|
+  3. Mappings ............. |fujjitive-mappings|
+  4. Configuration ........ |fujjitive-configuration|
+
+==============================================================================
+1. INTRODUCTION                                       *fujjitive-introduction*
+
+fujjitive shows the `jj log` graph in one window with the diff of the selected
+change in a split below it. Moving the cursor changes the diff.
+
+It is not a full jj client. Graph navigation and review are the whole product;
+operations are a small set of |:JJ| subcommands.
+
+Requires Neovim 0.10+ and `jj` on your PATH.
+
+==============================================================================
+2. COMMANDS                                               *fujjitive-commands*
+
+                                                                         *:JJ*
+:JJ                     Open the graph in a new tab.
+
+:JJ new [args]          Create a new change on top of the change under the
+                        cursor.
+
+:JJ edit [args]         Make the change under the cursor the working copy.
+
+:JJ describe            Open the description of the change under the cursor in
+                        a split. Writing the buffer (|:w|) applies it; the
+                        buffer then closes and the graph refreshes.
+
+:JJ squash [args]       Squash the change under the cursor into its parent.
+
+:JJ abandon [args]      Abandon the change under the cursor, after confirming.
+
+:JJ undo [args]         Undo the last jj operation.
+
+Extra arguments are passed through to jj unchanged, so `:JJ new --no-edit`
+works. Subcommand names complete with <Tab>.
+
+Each command acts on the change under the cursor, refreshes the graph, and
+restores the cursor to the same change where it still exists.
+
+                                                                  *:Fujjitive*
+:Fujjitive              Same as |:JJ| with no arguments.
+
+==============================================================================
+3. MAPPINGS                                               *fujjitive-mappings*
+
+In the graph window:
+
+  j            Move to the next change.
+  k            Move to the previous change.
+
+               These move by change, not by line, so a change occupying
+               several lines still takes one keypress.
+
+  l            Hop to the graph lane on the right.
+  h            Hop to the graph lane on the left.
+
+               Lane motion finds the nearest occupied column in that
+               direction, then the nearest change within that column.
+
+  <CR>         Move the cursor into the diff pane.
+  d            Toggle the diff pane.
+  R            Refresh the graph.
+  q            Close fujjitive.
+  g?           Show the mappings.
+
+Set `default_keymaps = false` to define your own; see
+|fujjitive-configuration|.
+
+==============================================================================
+4. CONFIGURATION                                     *fujjitive-configuration*
+
+>lua
+    require("fujjitive").setup({
+      revset          = nil,
+      log_template    = "builtin_log_compact",
+      diff_height     = 0.55,
+      diff_debounce   = 60,
+      diff_format     = "--color-words",
+      default_keymaps = true,
+      node_glyphs     = { "@", "○", "◆", "×", "●", "◉", "o", "+", "x", "*" },
+    })
+<
+revset ~
+        Revset shown in the graph. nil uses your `revsets.log` setting. Set to
+        "::" to show all revisions.
+
+log_template ~
+        jj template expression rendered for each change. The change-id
+        sentinel used to map lines back to changes is added automatically.
+
+diff_height ~
+        Height of the diff pane as a fraction of the tab page.
+
+diff_debounce ~
+        Milliseconds to wait after the cursor stops before loading a diff.
+
+diff_format ~
+        Passed to `jj show`. "--color-words" is jj's word-level diff;
+        "--git" gives a plain unified diff.
+
+default_keymaps ~
+        Set to false to skip the graph mappings entirely.
+
+node_glyphs ~
+        Characters jj may draw a node with. Used to find each node's column so
+        that h and l can hop lanes.
+
+ vim:tw=78:ts=8:noet:ft=help:norl:
