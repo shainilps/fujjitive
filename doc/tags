@@ -3,6 +3,8 @@
 :JJ-status	fujjitive.txt	/*:JJ-status*
 fujjitive-commands	fujjitive.txt	/*fujjitive-commands*
 fujjitive-configuration	fujjitive.txt	/*fujjitive-configuration*
+fujjitive-conflict-highlights	fujjitive.txt	/*fujjitive-conflict-highlights*
+fujjitive-conflicts	fujjitive.txt	/*fujjitive-conflicts*
 fujjitive-contents	fujjitive.txt	/*fujjitive-contents*
 fujjitive-graph-mappings	fujjitive.txt	/*fujjitive-graph-mappings*
 fujjitive-introduction	fujjitive.txt	/*fujjitive-introduction*

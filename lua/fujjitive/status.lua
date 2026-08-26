@@ -26,16 +26,38 @@ M.alive = alive
 --- Pull the changed-file list out of `jj status` output.
 --- Status lines look like "M path", "A path", "D path"; a rename is
 --- "R old => new", where the working-copy file is the right-hand side.
+---
+--- Conflicts live in their own section and do NOT get a status letter -- jj
+--- will happily say "The working copy has no changes" while a file is
+--- conflicted -- so they need separate handling or they'd be invisible here:
+---
+---     Warning: There are unresolved conflicts at these paths:
+---     f.txt    2-sided conflict
+---
+--- Returns the line -> path map and the set of conflicted paths.
 function M.parse_files(lines)
-  local files = {}
+  local files, conflicted = {}, {}
+  local in_conflicts = false
+
   for i, line in ipairs(lines) do
-    local flag, rest = line:match("^([MADCR])%s(.+)$")
-    if flag and rest ~= "" then
-      local _, renamed = rest:match("^(.-)%s+=>%s+(.+)$")
-      files[i] = renamed or rest
+    if line:find("unresolved conflicts at these paths") then
+      in_conflicts = true
+    else
+      local path = in_conflicts and line:match("^(%S.-)%s%s+%d+%-sided") or nil
+      if path then
+        files[i] = path
+        conflicted[path] = true
+      else
+        in_conflicts = false
+        local flag, rest = line:match("^([MADCR])%s(.+)$")
+        if flag and rest ~= "" then
+          local _, renamed = rest:match("^(.-)%s+=>%s+(.+)$")
+          files[i] = renamed or rest
+        end
+      end
     end
   end
-  return files
+  return files, conflicted
 end
 
 function M.file_at_cursor()
@@ -98,7 +120,7 @@ function M.refresh(opts)
         return
       end
       local lines, highlights = ansi.parse(out)
-      M.state.files = M.parse_files(lines)
+      M.state.files, M.state.conflicted = M.parse_files(lines)
       ansi.render(M.state.bufnr, lines, highlights)
       if opts.keep_line then
         local last = vim.api.nvim_buf_line_count(M.state.bufnr)
@@ -258,6 +280,7 @@ function M.help()
     "fujjitive — status keymaps",
     "",
     "  dv        diff this file side by side (dd does the same)",
+    "            on a conflicted file this paints the conflicts instead",
     "  ds        diff this file, stacked",
     "  <CR>      open this file",
     "  X         discard changes to this file",
@@ -285,7 +308,7 @@ function M.open()
 
   local buf = panel.scratch("fujjitive://status", "fujjitive-status")
   set_keymaps(buf)
-  M.state = { bufnr = buf, root = root, files = {} }
+  M.state = { bufnr = buf, root = root, files = {}, conflicted = {} }
   panel.open(buf, "status", root)
   setup_autorefresh(buf)
   M.refresh()

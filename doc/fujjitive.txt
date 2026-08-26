@@ -8,7 +8,8 @@ CONTENTS                                                  *fujjitive-contents*
   3. Commands ............. |fujjitive-commands|
   4. Graph mappings ....... |fujjitive-graph-mappings|
   5. Status mappings ...... |fujjitive-status-mappings|
-  6. Configuration ........ |fujjitive-configuration|
+  6. Conflicts ............ |fujjitive-conflicts|
+  7. Configuration ........ |fujjitive-configuration|
 
 ==============================================================================
 1. INTRODUCTION                                       *fujjitive-introduction*
@@ -125,6 +126,9 @@ In the |:JJ-status| panel:
                equivalent is `@-`, the parent of the working copy, which is
                exactly what `jj status` reports on.
 
+               If the file is CONFLICTED, dv opens it as a single painted
+               page instead of a diff. See |fujjitive-conflicts|.
+
   <CR>         Open this file in the top half.
   X            Discard this file's working-copy changes, after confirming.
   J            Move to the next file.
@@ -144,7 +148,62 @@ Set `default_keymaps = false` to define your own; see
 |fujjitive-configuration|.
 
 ==============================================================================
-6. CONFIGURATION                                     *fujjitive-configuration*
+CONFLICTS                                                *fujjitive-conflicts*
+
+Conflicted files appear in the |:JJ-status| list. jj gives them no status
+letter -- it may report "The working copy has no changes" while a file is
+conflicted -- so they are read from jj's own conflicts section.
+
+`dv` on a conflicted file opens it on one page in the top half, with every
+conflict painted in place: each side highlighted, the base dimmed, and a label
+on each marker saying which side is which.
+
+This is deliberately not a side-by-side merge view. The working file carries
+markers that the clean sides do not, so Vim's diff algorithm lines it up
+against text that is not really there and the result reads wrong. The painted
+buffer IS the file, so there is nothing to misalign.
+
+  co           Take side #1 for the conflict under the cursor.
+  ct           Take side #2 for it.
+  cb           Take both, side #1 then side #2.
+
+               The cursor starts on the first conflict and moves to the next
+               one after each accept, so a file is usually just co / ct / cb
+               tapped until it is done. They work per conflict, so sides can
+               be mixed within one file.
+
+  ]x           Move to the next conflict.
+  [x           Move to the previous conflict.
+
+  cO           Take side #1 for the whole file.
+  cT           Take side #2 for the whole file.
+
+               These run `jj resolve --tool :ours` and `:theirs`.
+
+  q            Close the conflict view.
+  g?           Show the mappings.
+
+You can also ignore the keys and edit by hand. The painting updates as you
+type, jj detects resolution once the markers are gone, and writing the buffer
+closes the view and refreshes the status list.
+
+                                                    *fujjitive-conflict-highlights*
+The highlight groups all link to standard diff groups by default, so they
+follow your colourscheme. Override any of them to taste: >lua
+    vim.api.nvim_set_hl(0, "FujjitiveConflictSide1", { link = "DiffAdd" })
+<
+  FujjitiveConflictMarker    the <<<<<<< / %%%%%%% / +++++++ / >>>>>>> lines
+  FujjitiveConflictLabel     the "side #1" labels at end of line
+  FujjitiveConflictBase      base lines (the "-" lines in a diff section)
+  FujjitiveConflictSide1     side #1 content
+  FujjitiveConflictSide2     side #2 content
+  FujjitiveConflictSide3     side #3 and beyond
+
+Only conflicts in the working copy (`@`) are handled. To resolve one deeper in
+history, run `jj new <rev>` first, as jj itself suggests.
+
+==============================================================================
+7. CONFIGURATION                                     *fujjitive-configuration*
 
 >lua
     require("fujjitive").setup({

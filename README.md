@@ -136,8 +136,55 @@ the repo are ignored, and a burst of them (`:wall`, a formatter) costs one `jj s
 your working copy on the right. The right side is the actual file, so you can edit it there and
 `:w`. `q` closes both and turns diff mode off.
 
+On a **conflicted** file, `dv` opens a painted single-page view instead — see below.
+
 Fugitive diffs against the git index. jj has no index, so `dv` diffs against `@-`, the parent of
 the working copy — which is exactly what `jj status` is reporting on.
+
+### Resolving conflicts
+
+Conflicted files show up in the status list with their conflict description. jj doesn't give them
+a status letter — it will happily report "The working copy has no changes" while a file is
+conflicted — so they're listed from jj's own conflicts section:
+
+```
+Working copy changes:
+M plain.txt
+Warning: There are unresolved conflicts at these paths:
+m.txt    2-sided conflict
+```
+
+`dv` on one of those opens the file on **one page**, with every conflict painted in place:
+
+```
+  top
+  alpha
+  <<<<<<< Conflict 1 of 2               conflict 1 of 2 — co: side #1 · ct: side #2 · cb: both
+  %%%%%%% Changes from base to side #1  side #1, as a diff from base
+  -beta            ← base, dimmed
+  +BETA-A          ← side #1
+  +++++++ Contents of side #2           side #2
+  BETA-B           ← side #2
+  >>>>>>> Conflict 1 of 2 ends
+  gamma
+```
+
+| key | does |
+|-----|------|
+| `co` | take **side #1** for the conflict under the cursor |
+| `ct` | take **side #2** for it |
+| `cb` | take **both**, side #1 then side #2 |
+| `]x` / `[x` | next / previous conflict |
+| `cO` / `cT` | take side #1 / #2 for the **whole file** (`jj resolve --tool :ours/:theirs`) |
+| `q` | close |
+| `g?` | show this list |
+
+The cursor starts on the first conflict and jumps to the next one after each accept, so a file is
+usually just `co ct cb` tapped until it's done. These work per conflict, so you can mix sides
+within one file.
+
+Or ignore the keys entirely and edit by hand — the painting updates as you type, jj detects
+resolution once the markers are gone, and `:w` closes the view and updates the status list.
 
 ### Commands
 
@@ -278,6 +325,36 @@ jj's own colours without a syntax file.
 an entry to the op log. `jj status` is the deliberate exception — it's *about* the working copy,
 so it snapshots on purpose.
 
+**jj's conflict markers are not git's.** One side is written as a *diff from base*, the other as
+literal content — and which is which **swaps** between a merge conflict and a rebase conflict:
+
+```
+merge conflict                        rebase conflict
+<<<<<<< Conflict 1 of 1               <<<<<<< Conflict 1 of 1
+%%%%%%% Changes from base to side #1  +++++++ Contents of side #1
+-SHARED                               SECOND
++AAA                                  %%%%%%% Changes from base to side #2
++++++++ Contents of side #2           -SHARED
+BBB                                   +FIRST
+>>>>>>> Conflict 1 of 1 ends          >>>>>>> Conflict 1 of 1 ends
+```
+
+So the parser keys off the section headers and never off position — assuming position reports
+your two sides backwards, quietly, in half of all cases. Both shapes are pinned as test fixtures.
+
+Three things that look like they should work and don't:
+
+- Reconstructing the sides from the change's **parents** fails — a rebase conflict has only one
+  parent.
+- Resolving a hunk with Vim's native **`diffget`** fails. Vim computes its hunks by diffing the
+  marker-laden buffer against a clean side, and those boundaries don't line up with the marker
+  blocks, so it leaves marker fragments behind. `co`/`ct`/`cb` re-parse the buffer and replace
+  exactly the block the cursor is in.
+- A **side-by-side merge view** is inaccurate for the same underlying reason: the working file
+  carries markers the clean sides don't, so Vim aligns it against text that isn't really there.
+  That's why conflicts get one painted page instead of three panes — the buffer *is* the file,
+  so there is nothing to misalign.
+
 **Giving the top half back.** `K` and `dv` don't open a window, they borrow the one you came
 from, remembering which buffer was in it. `q` puts that buffer back. That's why the layout stays
 an honest two halves instead of accumulating slivers.
@@ -290,7 +367,8 @@ an honest two halves instead of accumulating slivers.
 | `lua/fujjitive/graph.lua` | graph view, sentinel parse, `j/k/h/l` |
 | `lua/fujjitive/status.lua` | `jj status` view, line → path map, `X` |
 | `lua/fujjitive/show.lua` | the change view `K` opens |
-| `lua/fujjitive/vdiff.lua` | `dv` — real Vim diff of one file against `@-` |
+| `lua/fujjitive/vdiff.lua` | `dv` — 2-way Vim diff, or the painted conflict page |
+| `lua/fujjitive/conflict.lua` | reading jj's conflict markers (read-only) |
 | `lua/fujjitive/ops.lua` | `:JJ` subcommands |
 | `lua/fujjitive/config.lua` | defaults |
 
@@ -299,5 +377,9 @@ an honest two halves instead of accumulating slivers.
 Generic `:JJ <anything>` passthrough, rebase/duplicate, bookmark management, and a file list
 per change (right now `K` shows the whole change as one buffer; `dv` only works from
 `:JJ status`).
+
+Conflicts: only the working copy (`@`) is handled — to resolve a conflict deeper in history, run
+`jj new <rev>` first, as jj itself suggests. Conflicts with 3+ sides get the marker view and
+`co`/`ct` but not the side panes.
 
 `s` is squash because `a` was already abandon. That pair still wants a better answer.

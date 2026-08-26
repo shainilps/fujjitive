@@ -7,6 +7,7 @@
 local ansi = require("fujjitive.ansi")
 local graph = require("fujjitive.graph")
 local status = require("fujjitive.status")
+local conflict = require("fujjitive.conflict")
 
 local passed, failed = 0, 0
 
@@ -160,6 +161,164 @@ end
 do
   local files = status.parse_files({ "The working copy has no changes." })
   check("clean working copy yields no files", next(files), nil)
+end
+
+do
+  -- Real jj output, captured from a MERGE conflict: side #1 is written as a
+  -- diff from base, side #2 as literal content.
+  local merge = vim.split(table.concat({
+    "line one",
+    "<<<<<<< Conflict 1 of 1",
+    "%%%%%%% Changes from base to side #1",
+    "-SHARED",
+    "+AAA from side A",
+    "+++++++ Contents of side #2",
+    "BBB from side B",
+    ">>>>>>> Conflict 1 of 1 ends",
+    "line three",
+  }, "\n"), "\n", { plain = true })
+  local r = conflict.parse(merge)
+  check("merge: conflicted", r.conflicted, true)
+  check("merge: two sides", r.max_side, 2)
+  check("merge: side 1 reconstructed", r.sides[1], { "line one", "AAA from side A", "line three" })
+  check("merge: side 2 reconstructed", r.sides[2], { "line one", "BBB from side B", "line three" })
+  check("merge: base reconstructed", r.base, { "line one", "SHARED", "line three" })
+  check("merge: hunk range", { r.hunks[1].first, r.hunks[1].last }, { 2, 8 })
+end
+
+do
+  -- Real jj output from a REBASE conflict. The sections SWAP: side #1 is now
+  -- literal and side #2 is the diff. Anything that keys off position rather
+  -- than the section headers silently reports these two sides backwards.
+  local rebase = vim.split(table.concat({
+    "a",
+    "<<<<<<< Conflict 1 of 1",
+    "+++++++ Contents of side #1",
+    "SECOND",
+    "%%%%%%% Changes from base to side #2",
+    "-SHARED",
+    "+FIRST",
+    ">>>>>>> Conflict 1 of 1 ends",
+    "c",
+  }, "\n"), "\n", { plain = true })
+  local r = conflict.parse(rebase)
+  check("rebase: side 1 is the literal section", r.sides[1], { "a", "SECOND", "c" })
+  check("rebase: side 2 is the diff section", r.sides[2], { "a", "FIRST", "c" })
+  check("rebase: base reconstructed", r.base, { "a", "SHARED", "c" })
+end
+
+do
+  -- Context lines inside a diff section are space-prefixed and belong to base
+  -- AND to that side.
+  local ctx = vim.split(table.concat({
+    "p",
+    "<<<<<<< Conflict 1 of 1",
+    "%%%%%%% Changes from base to side #1",
+    "-q",
+    "+Q1",
+    " r",
+    "-s",
+    "+S1",
+    "+++++++ Contents of side #2",
+    "WHOLE",
+    ">>>>>>> Conflict 1 of 1 ends",
+    "t",
+  }, "\n"), "\n", { plain = true })
+  local r = conflict.parse(ctx)
+  check("context: kept in side 1", r.sides[1], { "p", "Q1", "r", "S1", "t" })
+  check("context: kept in base", r.base, { "p", "q", "r", "s", "t" })
+  check("context: side 2 literal", r.sides[2], { "p", "WHOLE", "t" })
+end
+
+do
+  -- Two hunks; each carries its own per-side content, which is what d1o/d2o
+  -- splice in.
+  local multi = vim.split(table.concat({
+    "top",
+    "<<<<<<< Conflict 1 of 2",
+    "%%%%%%% Changes from base to side #1",
+    "-beta",
+    "+BETA-A",
+    "+++++++ Contents of side #2",
+    "BETA-B",
+    ">>>>>>> Conflict 1 of 2 ends",
+    "gamma",
+    "<<<<<<< Conflict 2 of 2",
+    "%%%%%%% Changes from base to side #1",
+    "-delta",
+    "+DELTA-A",
+    "+++++++ Contents of side #2",
+    "DELTA-B",
+    ">>>>>>> Conflict 2 of 2 ends",
+    "bottom",
+  }, "\n"), "\n", { plain = true })
+  local r = conflict.parse(multi)
+  check("multi: two hunks", #r.hunks, 2)
+  check("multi: hunk 1 side 1", r.hunks[1].sides[1], { "BETA-A" })
+  check("multi: hunk 2 side 2", r.hunks[2].sides[2], { "DELTA-B" })
+  check("multi: hunk 2 range", { r.hunks[2].first, r.hunks[2].last }, { 10, 16 })
+  check("multi: whole-file side 1", r.sides[1], { "top", "BETA-A", "gamma", "DELTA-A", "bottom" })
+end
+
+do
+  local clean = conflict.parse({ "just", "normal", "lines" })
+  check("clean file is not conflicted", clean.conflicted, false)
+  check("clean file has no hunks", #clean.hunks, 0)
+  check("is_conflicted says no", conflict.is_conflicted({ "a", "b" }), false)
+  check("is_conflicted says yes", conflict.is_conflicted({ "<<<<<<< Conflict 1 of 1" }), true)
+end
+
+do
+  -- Per-line roles drive the painting. The rebase shape is used here on
+  -- purpose: side #1 literal, side #2 a diff.
+  local r = conflict.regions({
+    "a",
+    "<<<<<<< Conflict 1 of 1",
+    "+++++++ Contents of side #1",
+    "SECOND",
+    "%%%%%%% Changes from base to side #2",
+    "-SHARED",
+    "+FIRST",
+    " ctx",
+    ">>>>>>> Conflict 1 of 1 ends",
+    "c",
+  })
+  check("plain line has no region", r[1], nil)
+  check("start marker", r[2].role, "start")
+  check("literal header knows its side", { r[3].role, r[3].side, r[3].diff }, { "header", 1, false })
+  check("literal content is side 1", { r[4].role, r[4].side }, { "content", 1 })
+  check("diff header knows its side", { r[5].role, r[5].side, r[5].diff }, { "header", 2, true })
+  check("minus line is base", { r[6].role, r[6].side, r[6].mark }, { "content", 2, "-" })
+  check("plus line is its side", { r[7].role, r[7].side, r[7].mark }, { "content", 2, "+" })
+  check("context line is marked as such", r[8].mark, " ")
+  check("finish marker", r[9].role, "finish")
+  check("line after the block has no region", r[10], nil)
+end
+
+do
+  -- Conflicts get no status letter, and jj may even say the working copy has
+  -- no changes while a file is conflicted.
+  local files, conflicted = status.parse_files({
+    "The working copy has no changes.",
+    "Working copy  (@) : abc 123 (conflict) merge",
+    "Warning: There are unresolved conflicts at these paths:",
+    "m.txt    2-sided conflict",
+  })
+  check("conflicted file is listed", files[4], "m.txt")
+  check("conflicted file is flagged", conflicted["m.txt"], true)
+  check("headers are not files", files[1], nil)
+end
+
+do
+  local files, conflicted = status.parse_files({
+    "Working copy changes:",
+    "M plain.txt",
+    "Warning: There are unresolved conflicts at these paths:",
+    "m.txt    2-sided conflict",
+  })
+  check("modified file alongside a conflict", files[2], "plain.txt")
+  check("conflicted file alongside a modification", files[4], "m.txt")
+  check("modified file is not flagged conflicted", conflicted["plain.txt"], nil)
 end
 
 print(("\n%d passed, %d failed"):format(passed, failed))
