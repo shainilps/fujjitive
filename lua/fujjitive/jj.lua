@@ -54,7 +54,15 @@ function M.run(opts)
   end
   vim.list_extend(cmd, opts.args)
 
-  return vim.system(cmd, { text = true, stdin = opts.stdin }, function(res)
+  -- Safety net: several jj commands fall back to $EDITOR (squash combining two
+  -- descriptions, `config edit`, an interactive split). Spawned from here that
+  -- editor has no terminal and never returns, which freezes Neovim. Making the
+  -- editor fail turns a hang into an error message we can show.
+  return vim.system(cmd, {
+    text = true,
+    stdin = opts.stdin,
+    env = { JJ_EDITOR = "false", GIT_EDITOR = "false" },
+  }, function(res)
     vim.schedule(function()
       opts.on_done(res.code == 0, res.stdout or "", res.stderr or "")
     end)

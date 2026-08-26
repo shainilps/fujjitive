@@ -188,24 +188,60 @@ resolution once the markers are gone, and `:w` closes the view and updates the s
 
 ### Commands
 
+**None of these need the graph open.** With it open they act on the change under the cursor;
+without it they act on the working copy, same as plain `jj` would.
+
 | command | does |
 |---------|------|
 | `:JJ` | open the graph |
 | `:JJ log` | switch the panel back to the graph |
-| `:JJ status` | switch the panel to the file list (`:JJ st` works too) |
+| `:JJ status` | switch the panel to the file list |
 | `:JJ new` | new change on top of this one |
 | `:JJ edit` | make this change the working copy |
-| `:JJ describe` | edit the description on top — **`:w` applies it** |
+| `:JJ describe` | edit the description — **`:w` applies it** |
 | `:JJ squash` | squash this change into its parent |
+| `:JJ split <paths>` | peel those paths off into their own change |
 | `:JJ abandon` | abandon it (asks first) |
-| `:JJ undo` | undo the last jj operation |
+| `:JJ undo` / `:JJ redo` | step backwards / forwards through jj operations |
 
-In the graph these act on the change under the cursor; in the status view they act on the
-working copy. `<Tab>` completes the names, and extra arguments pass straight through to jj, so
-`:JJ new --no-edit` works.
+Short forms: `st` and `stat` for `status`, `desc` and `d` for `describe`, `l` for `log`.
+
+**An explicit revision wins over the cursor.** `:JJ edit xyz` edits `xyz`; `:JJ new --no-edit`
+still acts on the cursor's change, because a leading `-` marks a flag rather than a revset.
+
+**Anything else goes straight to jj.** There's no allow-list, so all of these already work:
+
+```vim
+:JJ bookmark set main -r @      " bookmarks
+:JJ bookmark list
+:JJ op log                      " operation log
+:JJ config list                 " config
+:JJ config edit                 " opens the file in Neovim, not $EDITOR
+:JJ rebase -d main
+```
+
+Whatever the command prints comes back in a pane you can read and close with `q`. jj writes data
+to stdout and progress to stderr, so output lands in the pane and status lines become messages.
 
 `:JJ undo` is worth remembering while you're finding your feet — jj's undo is why poking at the
-graph is safe.
+graph is safe, and `:JJ redo` walks it back.
+
+### Commands that want an editor
+
+Three jj commands normally open `$EDITOR`, which can't work from inside a Neovim subprocess — it
+would hang with no terminal to type into. fujjitive asks in a Neovim buffer instead, and `:w`
+runs the command:
+
+- **`:JJ describe`** — always.
+- **`:JJ squash`** — only when *both* changes have a description and jj needs a combined one.
+  Otherwise it just squashes.
+- **`:JJ split <paths>`** — asks for the new change's description.
+
+As a backstop, jj is invoked with its editor disabled, so anything that still reaches for one
+fails with a message rather than freezing Neovim.
+
+`:JJ split` needs paths (`:JJ split src/a.lua`) — jj's interactive split opens its own diff
+editor, which has the same problem.
 
 ---
 
@@ -377,6 +413,10 @@ an honest two halves instead of accumulating slivers.
 Generic `:JJ <anything>` passthrough, rebase/duplicate, bookmark management, and a file list
 per change (right now `K` shows the whole change as one buffer; `dv` only works from
 `:JJ status`).
+
+**Future:** a `:JJ diff` that opens every changed file as its own vertical buffer, scrolled
+together, rather than one file at a time. `dv` from `:JJ status` already covers the single-file
+case.
 
 Conflicts: only the working copy (`@`) is handled — to resolve a conflict deeper in history, run
 `jj new <rev>` first, as jj itself suggests. Conflicts with 3+ sides get the marker view and
