@@ -1,20 +1,29 @@
--- The graph pane: renders `jj log`, maps buffer lines back to change IDs, and
--- owns the j/k/h/l motions.
+-- The graph view: renders `jj log` in the bottom panel, maps buffer lines back
+-- to change IDs, and owns the j/k/h/l motions.
+--
+-- Nothing here opens a diff on its own. Moving the cursor is free; `v` is what
+-- asks to see a change.
 local M = {}
 
 local ansi = require("fujjitive.ansi")
 local jj = require("fujjitive.jj")
+local panel = require("fujjitive.panel")
 local config = require("fujjitive.config")
 
--- state = { root, bufnr, winid, tabpage, lines, highlights, nodes, line_to_node }
+-- state = { root, bufnr, lines, highlights, nodes, line_to_node }
 M.state = nil
 
 --- The sentinel wraps the change ID so we can recover it from any line. jj adds
 --- the graph prefix (edges + node glyph) before our template output, so the
 --- sentinel always sits immediately after the prefix.
+---
+--- The payload also carries the parent IDs, separated by \1, because columns
+--- cannot tell branches apart: jj draws sibling branches in the same lane.
+--- Topology can.
 local function template()
   return string.format(
-    '"\\x00" ++ change_id.short(12) ++ "\\x00" ++ (%s)',
+    '"\\x00" ++ change_id.short(12) ++ "\\x01"'
+      .. ' ++ parents.map(|p| p.change_id().short(12)).join(",") ++ "\\x00" ++ (%s)',
     config.options.log_template
   )
 end
@@ -69,14 +78,20 @@ function M.parse_output(data)
 
   for i, line in ipairs(plain) do
     local spans = hls[i]
-    local s, e, id = line:find("%z(.-)%z")
+    local s, e, payload = line:find("%z(.-)%z")
 
     if s then
       local prefix = line:sub(1, s - 1)
       line = prefix .. line:sub(e + 1)
       spans = adjust_spans(spans, s - 1, e - s + 1)
+      local id, parents = payload:match("^([^\1]*)\1?(.*)$")
       current = #st.nodes + 1
-      st.nodes[current] = { lnum = i, col = node_col(prefix), change_id = id }
+      st.nodes[current] = {
+        lnum = i,
+        col = node_col(prefix),
+        change_id = id,
+        parents = parents ~= "" and vim.split(parents, ",", { plain = true }) or {},
+      }
     end
 
     st.lines[i] = line
@@ -89,26 +104,45 @@ function M.parse_output(data)
     end
   end
 
+  -- A head is a change nothing else in view descends from -- one per branch
+  -- tip, which is what <Tab> cycles through.
+  local is_parent = {}
+  for _, n in ipairs(st.nodes) do
+    for _, parent in ipairs(n.parents) do
+      is_parent[parent] = true
+    end
+  end
+  st.heads = {}
+  for i, n in ipairs(st.nodes) do
+    if not is_parent[n.change_id] then
+      st.heads[#st.heads + 1] = i
+    end
+  end
+
   return st
 end
 
 local function valid()
   local st = M.state
-  return st
-    and st.bufnr
+  return st ~= nil
+    and st.bufnr ~= nil
     and vim.api.nvim_buf_is_valid(st.bufnr)
-    and st.winid
-    and vim.api.nvim_win_is_valid(st.winid)
+    and panel.is_open()
+    and panel.kind() == "graph"
 end
 
 M.valid = valid
+
+function M.root()
+  return M.state and M.state.root or panel.root()
+end
 
 function M.node_at_cursor()
   if not valid() then
     return nil
   end
   local st = M.state
-  local lnum = vim.api.nvim_win_get_cursor(st.winid)[1]
+  local lnum = vim.api.nvim_win_get_cursor(panel.win())[1]
   local idx = st.line_to_node[lnum]
   return idx and st.nodes[idx] or nil
 end
@@ -123,7 +157,7 @@ local function goto_node(node)
   if not node then
     return
   end
-  pcall(vim.api.nvim_win_set_cursor, M.state.winid, { node.lnum, node.col })
+  pcall(vim.api.nvim_win_set_cursor, panel.win(), { node.lnum, node.col })
 end
 
 --- Move by change, not by line, so multi-line entries never need two presses.
@@ -132,14 +166,18 @@ function M.move_change(delta)
   if not valid() or #st.nodes == 0 then
     return
   end
-  local lnum = vim.api.nvim_win_get_cursor(st.winid)[1]
+  local lnum = vim.api.nvim_win_get_cursor(panel.win())[1]
   local idx = st.line_to_node[lnum] or 1
   goto_node(st.nodes[math.max(1, math.min(#st.nodes, idx + delta))])
 end
 
 --- Hop to the adjacent graph lane: nearest occupied column in that direction,
 --- then the nearest change within that column.
-function M.hop_lane(dir)
+---
+--- `opts.wrap` comes back around when you run out of lanes, which is what makes
+--- <Tab> cycle through the branches rather than dead-ending at the edge.
+function M.hop_lane(dir, opts)
+  opts = opts or {}
   local st = M.state
   local cur = M.node_at_cursor()
   if not cur then
@@ -158,6 +196,21 @@ function M.hop_lane(dir)
       end
     end
   end
+
+  if not target_col and opts.wrap then
+    -- No lane that way: wrap to the far side (leftmost going right, and back).
+    for _, n in ipairs(st.nodes) do
+      if not target_col
+        or (dir > 0 and n.col < target_col)
+        or (dir < 0 and n.col > target_col)
+      then
+        target_col = n.col
+      end
+    end
+    if target_col == cur.col then
+      return -- only one lane; nothing to cycle to
+    end
+  end
   if not target_col then
     return
   end
@@ -172,6 +225,45 @@ function M.hop_lane(dir)
     end
   end
   goto_node(best)
+end
+
+--- Cycle through branch tips. This is what <Tab> does, and it deliberately
+--- ignores columns: jj draws sibling branches in the same lane, so a
+--- column-based hop can never reach all of them. Falls back to a lane hop if
+--- the graph has no branching to speak of.
+function M.next_branch(dir)
+  local st = M.state
+  if not valid() then
+    return
+  end
+  if not st.heads or #st.heads < 2 then
+    return M.hop_lane(dir, { wrap = true })
+  end
+
+  local lnum = vim.api.nvim_win_get_cursor(panel.win())[1]
+  local cur = st.line_to_node[lnum]
+  local pick
+
+  if dir > 0 then
+    for _, idx in ipairs(st.heads) do
+      if not cur or idx > cur then
+        pick = idx
+        break
+      end
+    end
+    pick = pick or st.heads[1]
+  else
+    for i = #st.heads, 1, -1 do
+      local idx = st.heads[i]
+      if not cur or idx < cur then
+        pick = idx
+        break
+      end
+    end
+    pick = pick or st.heads[#st.heads]
+  end
+
+  goto_node(st.nodes[pick])
 end
 
 --- Re-run `jj log` and repaint. `opts.keep_change` restores the cursor to that
@@ -206,6 +298,7 @@ function M.refresh(opts)
       st.lines = parsed.lines
       st.highlights = parsed.highlights
       st.nodes = parsed.nodes
+      st.heads = parsed.heads
       st.line_to_node = parsed.line_to_node
 
       ansi.render(st.bufnr, st.lines, st.highlights)
@@ -220,21 +313,8 @@ function M.refresh(opts)
         end
       end
       goto_node(target or st.nodes[1])
-
-      require("fujjitive.diff").show(M.current_change(), { force = true })
     end,
   })
-end
-
-local function create_buf(name, ft)
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].modifiable = false
-  vim.bo[buf].filetype = ft
-  pcall(vim.api.nvim_buf_set_name, buf, name .. "-" .. buf)
-  return buf
 end
 
 local function set_keymaps(buf)
@@ -245,103 +325,95 @@ local function set_keymaps(buf)
     vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, silent = true, desc = desc })
   end
 
+  local function op(name)
+    return function()
+      require("fujjitive.ops").commands[name]({})
+    end
+  end
+
   map("j", function() M.move_change(1) end, "Next change")
   map("k", function() M.move_change(-1) end, "Previous change")
-  map("l", function() M.hop_lane(1) end, "Hop to the lane on the right")
-  map("h", function() M.hop_lane(-1) end, "Hop to the lane on the left")
-  map("<CR>", function() require("fujjitive.diff").focus() end, "Focus the diff pane")
-  map("d", function() require("fujjitive.diff").toggle() end, "Toggle the diff pane")
+  map("<Tab>", function() M.next_branch(1) end, "Jump to the next branch")
+  map("<S-Tab>", function() M.next_branch(-1) end, "Jump to the previous branch")
+  map("K", function() M.view() end, "View this change in the top half")
+  map("<CR>", function() M.view({ focus = true }) end, "View this change and jump to it")
+  map("e", op("edit"), "jj edit this change")
+  map("n", op("new"), "jj new on top of this change")
+  map("s", op("squash"), "jj squash this change into its parent")
+  map("a", op("abandon"), "jj abandon this change")
+  map("cc", op("describe"), "Edit this change's description")
+  map("gs", function() require("fujjitive.status").open() end, "Switch to jj status")
   map("R", function() M.refresh({ keep_change = M.current_change() }) end, "Refresh")
   map("q", function() M.close() end, "Close fujjitive")
   map("g?", function() M.help() end, "Show keymaps")
 end
 
+--- Open the change under the cursor in the top half. On demand, always -- this
+--- is the only thing that puts a diff on screen.
+function M.view(opts)
+  require("fujjitive.show").open(M.current_change(), opts)
+end
+
 function M.help()
-  local lines = {
+  vim.notify(table.concat({
     "fujjitive — graph keymaps",
     "",
     "  j / k     next / previous change",
-    "  h / l     hop between graph lanes",
-    "  <CR>      focus the diff pane",
-    "  d         toggle the diff pane",
-    "  R         refresh the graph",
-    "  q         close",
-    "  g?        this help",
+    "  <Tab>     jump to the next branch (<S-Tab> for the previous)",
+    "  K         view this change in the top half",
+    "  <CR>      view it and jump into that window",
     "",
-    "  :JJ new | edit | describe | squash | abandon | undo",
-    "  (each acts on the change under the cursor)",
-  }
-  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+    "  e         jj edit          n    jj new",
+    "  s         jj squash        a    jj abandon",
+    "  cc        describe (:w applies it)",
+    "",
+    "  gs        switch to jj status",
+    "  R         refresh          q    close",
+    "",
+    "  :JJ log | status | new | edit | describe | squash | abandon | undo",
+  }, "\n"), vim.log.levels.INFO)
 end
 
 function M.close()
-  local st = M.state
   M.state = nil
-  require("fujjitive.diff").reset()
-  if st and st.tabpage and vim.api.nvim_tabpage_is_valid(st.tabpage) then
-    if #vim.api.nvim_list_tabpages() > 1 then
-      vim.api.nvim_set_current_tabpage(st.tabpage)
-      vim.cmd("tabclose")
-    end
-  end
+  require("fujjitive.show").invalidate()
+  require("fujjitive.status").state = nil
+  panel.close()
 end
 
 function M.open()
   if valid() then
-    vim.api.nvim_set_current_tabpage(M.state.tabpage)
-    vim.api.nvim_set_current_win(M.state.winid)
+    panel.focus()
     return
   end
 
-  local root = jj.root()
+  local root = panel.root() or jj.root()
   if not root then
     vim.notify("fujjitive: not inside a jj repo", vim.log.levels.ERROR)
     return
   end
 
-  local gbuf = create_buf("fujjitive://graph", "fujjitive")
-
-  vim.cmd("tabnew")
-  local tabpage = vim.api.nvim_get_current_tabpage()
-  local gwin = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(gwin, gbuf)
-
-  vim.wo[gwin].wrap = false
-  vim.wo[gwin].number = false
-  vim.wo[gwin].relativenumber = false
-  vim.wo[gwin].signcolumn = "no"
-  vim.wo[gwin].cursorline = true
-  vim.wo[gwin].list = false
+  local buf = panel.scratch("fujjitive://graph", "fujjitive")
+  set_keymaps(buf)
 
   M.state = {
     root = root,
-    bufnr = gbuf,
-    winid = gwin,
-    tabpage = tabpage,
+    bufnr = buf,
     lines = {},
     highlights = {},
     nodes = {},
+    heads = {},
     line_to_node = {},
   }
 
-  set_keymaps(gbuf)
-  require("fujjitive.diff").open()
-  vim.api.nvim_set_current_win(gwin)
+  panel.open(buf, "graph", root)
 
-  local group = vim.api.nvim_create_augroup("FujjitiveGraph" .. gbuf, { clear = true })
-  vim.api.nvim_create_autocmd("CursorMoved", {
-    group = group,
-    buffer = gbuf,
-    callback = function()
-      require("fujjitive.diff").show(M.current_change())
-    end,
-  })
+  local group = vim.api.nvim_create_augroup("FujjitiveGraph" .. buf, { clear = true })
   vim.api.nvim_create_autocmd("BufWipeout", {
     group = group,
-    buffer = gbuf,
+    buffer = buf,
     callback = function()
       M.state = nil
-      require("fujjitive.diff").reset()
     end,
   })
 

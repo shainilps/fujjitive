@@ -1,15 +1,21 @@
--- :JJ subcommands. Each acts on the change under the cursor by default.
+-- :JJ subcommands.
+--
+-- In the graph these act on the change under the cursor; in the status view
+-- they act on the working copy, since that is what status is about.
 local M = {}
 
 local jj = require("fujjitive.jj")
+local panel = require("fujjitive.panel")
 local graph = require("fujjitive.graph")
-local diff = require("fujjitive.diff")
 
 local function root()
-  return graph.state and graph.state.root or jj.root()
+  return panel.root() or jj.root()
 end
 
 local function current_change()
+  if panel.kind() == "status" then
+    return "@"
+  end
   local id = graph.current_change()
   if not id then
     vim.notify("fujjitive: no change under the cursor", vim.log.levels.WARN)
@@ -17,7 +23,15 @@ local function current_change()
   return id
 end
 
---- Run a mutating jj command, then repaint the graph.
+local function refresh_view(keep_change)
+  if panel.kind() == "status" then
+    require("fujjitive.status").refresh()
+  else
+    graph.refresh({ keep_change = keep_change })
+  end
+end
+
+--- Run a mutating jj command, then repaint whichever view is showing.
 local function run_op(args, opts)
   opts = opts or {}
   jj.run({
@@ -34,13 +48,21 @@ local function run_op(args, opts)
       if msg ~= "" then
         vim.notify(msg, vim.log.levels.INFO)
       end
-      diff.invalidate()
-      graph.refresh({ keep_change = opts.keep_change })
+      require("fujjitive.show").invalidate()
+      refresh_view(opts.keep_change)
     end,
   })
 end
 
 M.commands = {}
+
+M.commands["log"] = function()
+  graph.open()
+end
+
+M.commands["status"] = function()
+  require("fujjitive.status").open()
+end
 
 M.commands["new"] = function(args)
   local id = current_change()
@@ -63,8 +85,7 @@ end
 M.commands["abandon"] = function(args)
   local id = current_change()
   if not id then return end
-  local choice = vim.fn.confirm("Abandon change " .. id .. "?", "&Yes\n&No", 2)
-  if choice ~= 1 then
+  if vim.fn.confirm("Abandon change " .. id .. "?", "&Yes\n&No", 2) ~= 1 then
     return
   end
   run_op(vim.list_extend({ "abandon", id }, args))
@@ -74,7 +95,7 @@ M.commands["undo"] = function(args)
   run_op(vim.list_extend({ "undo" }, args), { keep_change = graph.current_change() })
 end
 
---- Opens the description in a scratch buffer; `:w` applies it.
+--- Opens the description in the top half; `:w` applies it.
 M.commands["describe"] = function()
   local id = current_change()
   if not id then return end
@@ -108,9 +129,15 @@ M.commands["describe"] = function()
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
       vim.bo[buf].modified = false
 
-      vim.cmd("botright split")
-      vim.api.nvim_win_set_buf(0, buf)
-      vim.api.nvim_win_set_height(0, math.max(8, math.min(15, #lines + 4)))
+      if not panel.top(buf, { focus = true }) then
+        vim.cmd("botright split")
+        vim.api.nvim_win_set_buf(0, buf)
+      end
+
+      vim.keymap.set("n", "q", function()
+        panel.release()
+        panel.focus()
+      end, { buffer = buf, nowait = true, silent = true, desc = "Abandon this edit" })
 
       vim.api.nvim_create_autocmd("BufWriteCmd", {
         buffer = buf,
@@ -127,9 +154,11 @@ M.commands["describe"] = function()
                 return
               end
               vim.bo[buf].modified = false
+              panel.release()
+              panel.focus()
               pcall(vim.api.nvim_buf_delete, buf, { force = true })
-              diff.invalidate()
-              graph.refresh({ keep_change = id })
+              require("fujjitive.show").invalidate()
+              refresh_view(id)
             end,
           })
         end,
@@ -138,13 +167,20 @@ M.commands["describe"] = function()
   })
 end
 
+-- Commands that stand on their own; everything else needs a view open first.
+local STANDALONE = { log = true, status = true, undo = true }
+
+-- Short forms. `names()` stays canonical so the error hint isn't cluttered,
+-- but these complete and dispatch just like the full spelling.
+local ALIASES = { st = "status", stat = "status", l = "log" }
+
 function M.dispatch(fargs)
   if #fargs == 0 then
     graph.open()
     return
   end
 
-  local name = fargs[1]
+  local name = ALIASES[fargs[1]] or fargs[1]
   local rest = vim.list_slice(fargs, 2)
   local fn = M.commands[name]
   if not fn then
@@ -155,7 +191,7 @@ function M.dispatch(fargs)
     return
   end
 
-  if not graph.valid() and name ~= "undo" then
+  if not panel.is_open() and not STANDALONE[name] then
     vim.notify("fujjitive: open the graph with :JJ first", vim.log.levels.WARN)
     return
   end
@@ -173,9 +209,14 @@ function M.complete(arg_lead, cmd_line)
   if cmd_line:match("^%s*JJ%s+%S+%s") then
     return {}
   end
+  local candidates = M.names()
+  for alias in pairs(ALIASES) do
+    candidates[#candidates + 1] = alias
+  end
+  table.sort(candidates)
   return vim.tbl_filter(function(name)
     return name:find(arg_lead, 1, true) == 1
-  end, M.names())
+  end, candidates)
 end
 
 return M

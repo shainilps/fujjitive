@@ -8,8 +8,14 @@ function M.setup(opts)
   config.setup(opts)
 end
 
+--- The graph in the bottom half.
 function M.open()
   require("fujjitive.graph").open()
+end
+
+--- `jj status` in the bottom half.
+function M.status()
+  require("fujjitive.status").open()
 end
 
 function M.close()
@@ -17,8 +23,13 @@ function M.close()
 end
 
 function M.refresh()
-  local graph = require("fujjitive.graph")
-  graph.refresh({ keep_change = graph.current_change() })
+  local panel = require("fujjitive.panel")
+  if panel.kind() == "status" then
+    require("fujjitive.status").refresh()
+  else
+    local graph = require("fujjitive.graph")
+    graph.refresh({ keep_change = graph.current_change() })
+  end
 end
 
 return M

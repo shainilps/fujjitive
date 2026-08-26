@@ -1,8 +1,11 @@
 :Fujjitive	fujjitive.txt	/*:Fujjitive*
 :JJ	fujjitive.txt	/*:JJ*
+:JJ-status	fujjitive.txt	/*:JJ-status*
 fujjitive-commands	fujjitive.txt	/*fujjitive-commands*
 fujjitive-configuration	fujjitive.txt	/*fujjitive-configuration*
 fujjitive-contents	fujjitive.txt	/*fujjitive-contents*
+fujjitive-graph-mappings	fujjitive.txt	/*fujjitive-graph-mappings*
 fujjitive-introduction	fujjitive.txt	/*fujjitive-introduction*
-fujjitive-mappings	fujjitive.txt	/*fujjitive-mappings*
+fujjitive-layout	fujjitive.txt	/*fujjitive-layout*
+fujjitive-status-mappings	fujjitive.txt	/*fujjitive-status-mappings*
 fujjitive.txt	fujjitive.txt	/*fujjitive.txt*

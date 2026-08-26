@@ -6,6 +6,7 @@
 
 local ansi = require("fujjitive.ansi")
 local graph = require("fujjitive.graph")
+local status = require("fujjitive.status")
 
 local passed, failed = 0, 0
 
@@ -107,7 +108,62 @@ do
     { st.highlights[1][1][1], st.highlights[1][1][2] }, { 0, 8 })
 end
 
+do
+  -- Branch tips come from parent topology, not columns. Here A and B are
+  -- siblings drawn in the SAME column (4) at different rows -- the case a
+  -- column-based hop can never cycle through correctly.
+  local fixture = table.concat({
+    "@  \0tipC\1base\0branch C",
+    "\1 o  \0tipB\1base\0branch B",
+    "|-/",
+    "\1 o  \0tipA\1base\0branch A",
+    "|-/",
+    "o  \0base\1root\0base",
+    "o  \0root\1\0root",
+  }, "\n"):gsub("\1 ", "| ")
+  local st = graph.parse_output(fixture)
+  check("all five changes parsed", #st.nodes, 5)
+  check("parents recovered", st.nodes[1].parents, { "base" })
+  check("root has no parents", st.nodes[5].parents, {})
+  check("three branch tips found", #st.heads, 3)
+  check("tips are the three branches",
+    { st.nodes[st.heads[1]].change_id, st.nodes[st.heads[2]].change_id, st.nodes[st.heads[3]].change_id },
+    { "tipC", "tipB", "tipA" })
+  check("siblings really do share a column", st.nodes[2].col, st.nodes[3].col)
+end
+
+do
+  -- `jj status` file lines vs its header lines. Headers start with W/P, which
+  -- is why a bare "<flag> <path>" match is safe here.
+  local files = status.parse_files({
+    "Working copy changes:",
+    "M src/a.rs",
+    "D b.txt",
+    "A c.txt",
+    "Working copy  (@) : tvlmlwnv 8249553c feat: colors",
+    "Parent commit (@-): rpkkzytq cc285c3e init files",
+  })
+  check("modified file", files[2], "src/a.rs")
+  check("deleted file", files[3], "b.txt")
+  check("added file", files[4], "c.txt")
+  check("section header is not a file", files[1], nil)
+  check("working-copy header is not a file", files[5], nil)
+  check("parent header is not a file", files[6], nil)
+end
+
+do
+  -- A rename reports both sides; the working-copy file is the right-hand one.
+  local files = status.parse_files({ "R old/name.rs => new/name.rs" })
+  check("rename maps to its new path", files[1], "new/name.rs")
+end
+
+do
+  local files = status.parse_files({ "The working copy has no changes." })
+  check("clean working copy yields no files", next(files), nil)
+end
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 if failed > 0 then
   vim.cmd("cq")
 end
+vim.cmd("qa!")

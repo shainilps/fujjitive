@@ -4,55 +4,77 @@
 CONTENTS                                                  *fujjitive-contents*
 
   1. Introduction ......... |fujjitive-introduction|
-  2. Commands ............. |fujjitive-commands|
-  3. Mappings ............. |fujjitive-mappings|
-  4. Configuration ........ |fujjitive-configuration|
+  2. Layout ............... |fujjitive-layout|
+  3. Commands ............. |fujjitive-commands|
+  4. Graph mappings ....... |fujjitive-graph-mappings|
+  5. Status mappings ...... |fujjitive-status-mappings|
+  6. Configuration ........ |fujjitive-configuration|
 
 ==============================================================================
 1. INTRODUCTION                                       *fujjitive-introduction*
 
-fujjitive shows the `jj log` graph in one window with the diff of the selected
-change in a split below it. Moving the cursor changes the diff.
+fujjitive shows the `jj log` graph in the bottom half of the screen and lets
+you move through it with Vim motions. The change you are reading opens in the
+top half only when you ask for it.
 
 It is not a full jj client. Graph navigation and review are the whole product;
 operations are a small set of |:JJ| subcommands.
 
-Requires Neovim 0.10+ and `jj` on your PATH.
+Requires Neovim 0.10+ and `jj` on your PATH. Developed against jj 0.36.
 
 ==============================================================================
-2. COMMANDS                                               *fujjitive-commands*
+2. LAYOUT                                                   *fujjitive-layout*
+
+fujjitive opens exactly one window: a panel across the bottom half, holding
+either the graph or |:JJ-status|. The top half stays yours.
+
+`K` and `dv` need somewhere to put a change, so they borrow the window you ran
+|:JJ| from, remembering which buffer was in it. `q` puts that buffer back.
+Nothing fujjitive opens is left behind, and the layout stays two halves rather
+than accumulating slivers.
+
+Moving through the graph runs no subprocess and takes no working-copy
+snapshot. `K` is the only mapping that puts a diff on screen.
+
+==============================================================================
+3. COMMANDS                                               *fujjitive-commands*
 
                                                                          *:JJ*
-:JJ                     Open the graph in a new tab.
+:JJ                     Open the graph in the bottom half.
 
-:JJ new [args]          Create a new change on top of the change under the
-                        cursor.
+:JJ log                 Switch the panel back to the graph.
 
-:JJ edit [args]         Make the change under the cursor the working copy.
+                                                                  *:JJ-status*
+:JJ status              Switch the panel to `jj status`: the list of files
+                        changed in the working copy. `:JJ st` is a synonym.
+                        The panel reloads itself; see
+                        |fujjitive-status-mappings|.
 
-:JJ describe            Open the description of the change under the cursor in
-                        a split. Writing the buffer (|:w|) applies it; the
-                        buffer then closes and the graph refreshes.
+:JJ new [args]          Create a new change on top of the current one.
 
-:JJ squash [args]       Squash the change under the cursor into its parent.
+:JJ edit [args]         Make the current change the working copy.
 
-:JJ abandon [args]      Abandon the change under the cursor, after confirming.
+:JJ describe            Open the current change's description in the top half.
+                        Writing the buffer (|:w|) applies it; the buffer then
+                        closes and the view refreshes. `q` abandons the edit.
+
+:JJ squash [args]       Squash the current change into its parent.
+
+:JJ abandon [args]      Abandon the current change, after confirming.
 
 :JJ undo [args]         Undo the last jj operation.
 
+In the graph, "the current change" is the one under the cursor. In the status
+view it is the working copy (`@`).
+
 Extra arguments are passed through to jj unchanged, so `:JJ new --no-edit`
 works. Subcommand names complete with <Tab>.
-
-Each command acts on the change under the cursor, refreshes the graph, and
-restores the cursor to the same change where it still exists.
 
                                                                   *:Fujjitive*
 :Fujjitive              Same as |:JJ| with no arguments.
 
 ==============================================================================
-3. MAPPINGS                                               *fujjitive-mappings*
-
-In the graph window:
+4. GRAPH MAPPINGS                                   *fujjitive-graph-mappings*
 
   j            Move to the next change.
   k            Move to the previous change.
@@ -60,15 +82,61 @@ In the graph window:
                These move by change, not by line, so a change occupying
                several lines still takes one keypress.
 
-  l            Hop to the graph lane on the right.
-  h            Hop to the graph lane on the left.
+  <Tab>        Jump to the next branch tip, wrapping at the end.
+  <S-Tab>      Jump to the previous branch tip.
 
-               Lane motion finds the nearest occupied column in that
-               direction, then the nearest change within that column.
+               This follows jj's parent topology rather than the columns it
+               draws. jj renders sibling branches in the same column, so a
+               column-based hop would skip branches; a branch tip is a change
+               nothing else in view descends from.
 
-  <CR>         Move the cursor into the diff pane.
-  d            Toggle the diff pane.
+  K            View this change in the top half.
+  <CR>         View it and move the cursor into that window.
+
+               The change view is `jj show`. `q` closes it and gives the top
+               half back. See `show_template` in |fujjitive-configuration| if
+               you want jj's metadata header.
+
+  e            `jj edit` this change.
+  n            `jj new` on top of this change.
+  s            `jj squash` this change into its parent.
+  a            `jj abandon` this change, after confirming.
+  cc           Edit this change's description; |:w| applies it.
+
+  gs           Switch to |:JJ-status|.
   R            Refresh the graph.
+  q            Close fujjitive.
+  g?           Show the mappings.
+
+==============================================================================
+5. STATUS MAPPINGS                                 *fujjitive-status-mappings*
+
+In the |:JJ-status| panel:
+
+  dv           Diff this file side by side. `dd` does the same.
+  ds           Diff this file, stacked instead of side by side.
+
+               Both open a real Vim diff (|diff-mode|) in the top half: the
+               file as of `diff_against` on the left, your working copy on the
+               right. The right side is the actual file, so you can edit it
+               there and write it. `q` closes both and turns diff mode off.
+
+               Fugitive diffs against the git index. jj has no index, so the
+               equivalent is `@-`, the parent of the working copy, which is
+               exactly what `jj status` reports on.
+
+  <CR>         Open this file in the top half.
+  X            Discard this file's working-copy changes, after confirming.
+  J            Move to the next file.
+  K            Move to the previous file.
+
+  gl           Switch back to the graph.
+  R            Refresh.
+
+               The panel also reloads itself: after any write inside the repo,
+               when you enter the window, and when Neovim regains focus. So a
+               file you just changed shows up without asking. Writes outside
+               the repo are ignored, and bursts are debounced into one call.
   q            Close fujjitive.
   g?           Show the mappings.
 
@@ -76,15 +144,16 @@ Set `default_keymaps = false` to define your own; see
 |fujjitive-configuration|.
 
 ==============================================================================
-4. CONFIGURATION                                     *fujjitive-configuration*
+6. CONFIGURATION                                     *fujjitive-configuration*
 
 >lua
     require("fujjitive").setup({
       revset          = nil,
       log_template    = "builtin_log_compact",
-      diff_height     = 0.55,
-      diff_debounce   = 60,
-      diff_format     = "--color-words",
+      panel_height    = 0.5,
+      show_format     = "--color-words",
+      show_template   = [[if(description, description, "(no description set)\n")]],
+      diff_against    = "@-",
       default_keymaps = true,
       node_glyphs     = { "@", "○", "◆", "×", "●", "◉", "o", "+", "x", "*" },
     })
@@ -97,18 +166,24 @@ log_template ~
         jj template expression rendered for each change. The change-id
         sentinel used to map lines back to changes is added automatically.
 
-diff_height ~
-        Height of the diff pane as a fraction of the tab page.
+panel_height ~
+        Height of the bottom panel as a fraction of the screen.
 
-diff_debounce ~
-        Milliseconds to wait after the cursor stops before loading a diff.
+show_format ~
+        Passed to `jj show` when you press `K`. "--color-words" is jj's
+        word-level diff; "--git" gives a plain unified diff.
 
-diff_format ~
-        Passed to `jj show`. "--color-words" is jj's word-level diff;
-        "--git" gives a plain unified diff.
+show_template ~
+        Header printed above that diff. The default prints the description and
+        nothing else: no commit ID, no change ID, no author, no timestamps.
+        Set to nil for jj's own header if you want the metadata.
+
+diff_against ~
+        Revision `dv` and `ds` compare a file against, and that `X` restores
+        it from. "@-" is the parent of the working copy.
 
 default_keymaps ~
-        Set to false to skip the graph mappings entirely.
+        Set to false to skip the graph and status mappings entirely.
 
 node_glyphs ~
         Characters jj may draw a node with. Used to find each node's column so
