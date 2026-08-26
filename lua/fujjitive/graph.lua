@@ -341,7 +341,7 @@ local function set_keymaps(buf)
   map("n", op("new"), "jj new on top of this change")
   map("s", op("squash"), "jj squash this change into its parent")
   map("a", op("abandon"), "jj abandon this change")
-  map("cc", op("describe"), "Edit this change's description")
+  map("d", op("describe"), "Describe this change")
   map("gs", function() require("fujjitive.status").open() end, "Switch to jj status")
   map("R", function() M.refresh({ keep_change = M.current_change() }) end, "Refresh")
   map("q", function() M.close() end, "Close fujjitive")
@@ -365,7 +365,7 @@ function M.help()
     "",
     "  e         jj edit          n    jj new",
     "  s         jj squash        a    jj abandon",
-    "  cc        describe (:w applies it)",
+    "  d         describe this change (:w applies it)",
     "",
     "  gs        switch to jj status",
     "  R         refresh          q    close",

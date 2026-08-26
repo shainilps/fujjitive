@@ -97,6 +97,25 @@ local function place(buf)
   end
 end
 
+--- A small split for typing a message into. Deliberately its own window rather
+--- than the panel's top half: writing a one-line description shouldn't evict
+--- whatever you were looking at.
+local function message_split(buf, lines)
+  vim.cmd("botright split")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  vim.api.nvim_win_set_height(win, math.max(6, math.min(14, #lines + 3)))
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].winfixheight = true
+  return function()
+    if vim.api.nvim_win_is_valid(win) and #vim.api.nvim_tabpage_list_wins(0) > 1 then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+end
+
 --- Open `lines` in a scratch buffer; `:w` hands the text to `apply`, which
 --- calls its `done` argument once jj has accepted it.
 local function message_buffer(name, lines, apply)
@@ -109,7 +128,7 @@ local function message_buffer(name, lines, apply)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modified = false
 
-  local dismiss = place(buf)
+  local dismiss = message_split(buf, lines)
 
   vim.keymap.set("n", "q", function()
     dismiss()
