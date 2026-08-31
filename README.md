@@ -254,20 +254,6 @@ require("fujjitive").setup({ revset = "::" })
 
 ## Working on the plugin
 
-### Reloading after you edit a file
-
-**This is the one thing that trips everyone up on their first plugin.** Neovim caches `require`d
-Lua modules. Editing `lua/fujjitive/graph.lua` changes _nothing_ until that cache is dropped —
-so it looks like your edit did nothing, and you go hunting for a bug that isn't there.
-
-Either restart Neovim, or:
-
-```vim
-:Lazy reload fujjitive
-```
-
-If you're iterating hard, restarting is the honest option — module-level state survives a reload.
-
 ### Where errors actually show up
 
 The live-diff hook runs inside an autocmd, and errors there scroll past silently. When something
