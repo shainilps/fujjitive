@@ -2,8 +2,7 @@
 
 > [!NOTE]
 > This is really LLM-generated at this point.
-> If I use it more, I'll definitely improve it.
-> I'm mentioning this because it's pretty simple: I prefer human slop over LLM slop
+> If I use jj more then only i will use this more.if that happens definitely improve it.
 
 Fugitive-style [jj](https://jj-vcs.github.io/jj/) change review for Neovim.
 
